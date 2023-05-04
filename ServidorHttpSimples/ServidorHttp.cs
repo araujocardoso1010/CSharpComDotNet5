@@ -9,10 +9,15 @@ namespace ServidorHttpSimples
         private TcpListener Controlador { get; set; } // escuta uma porta de rede a procura de alguma solicitação de conexão TCP
         private int Porta { get; set; }
         private int QtdRequests { get; set; } // contador de requisições
+        private SortedList<string, string> TiposMime { get; set; }
+
+        private SortedList<string, string> DiretoriosHost { get; set; }
 
         public ServidorHttp(int porta = 8080)
         {
             Porta = porta;
+            TiposMimeAdd();
+            MapearDiretoriosHost();
             try
             {
                 Controlador = new TcpListener(IPAddress.Parse("127.0.0.1"), Porta);
@@ -54,16 +59,33 @@ namespace ServidorHttpSimples
                     int segundoEspaco = linhas[0].LastIndexOf(" ");
                     string metodoHttp = linhas[0].Substring(0, primeiroEspaco);
                     string recursoBuscado = linhas[0].Substring(primeiroEspaco + 1, segundoEspaco - primeiroEspaco - 1);
+                    if (recursoBuscado == "/") recursoBuscado = "/index.html";
+                    string textoParametros = recursoBuscado.Contains("?") ?
+                        recursoBuscado.Split("?")[1] : "";
+                    SortedList<string, string> parametros = ProcessarParametros(textoParametros);
+                    recursoBuscado = recursoBuscado.Split("?")[0];
                     string versaoHttp = linhas[0].Substring(segundoEspaco + 1);
-
                     primeiroEspaco  = linhas[1].IndexOf(" ");
                     string nomeHost = linhas[1].Substring(primeiroEspaco + 1);
-
-                    Byte[] bytesCabecalho = null;
-                    var bytesConteudo = LerArquivo(recursoBuscado);
-                    if (bytesConteudo.Length > 0)
+                    byte[] bytesCabecalho = null;
+                    byte[] bytesConteudo = null;
+                    FileInfo arquivo = new(ObterDiretorio(nomeHost, recursoBuscado));
+                    if (arquivo.Exists)
                     {
-                        bytesCabecalho = GerarCabecalho(versaoHttp, "text/html;charset=utf-8", "200", bytesConteudo.Length);
+                        if (TiposMime.ContainsKey(arquivo.Extension.ToLower()))
+                        {
+                            if (arquivo.Extension.ToLower() == ".dhtml") 
+                                bytesConteudo = GerarHtmlDinamico(arquivo.FullName, parametros);
+                            else 
+                                bytesConteudo = File.ReadAllBytes(arquivo.FullName);
+                            string tipoMime = TiposMime[arquivo.Extension.ToLower()];
+                            bytesCabecalho = GerarCabecalho(versaoHttp, tipoMime, "200", bytesConteudo.Length);
+                        }
+                        else
+                        {
+                            bytesConteudo = Encoding.UTF8.GetBytes("<h1>Erro 415   Tipo de arquivo não suportado.");
+                            bytesCabecalho = GerarCabecalho(versaoHttp, "text/html;charset-utf8", "415", bytesConteudo.Length);
+                        }
                     }
                     else
                     {
@@ -86,15 +108,85 @@ namespace ServidorHttpSimples
             texto.Append($"Server: Servidor Http Simples 1.0{Environment.NewLine}");
             texto.Append($"Content-Type: {tipoMime}{Environment.NewLine}");
             texto.Append($"Content-Length: {qtdBytes}{Environment.NewLine}{Environment.NewLine}");
-            return Encoding.UTF8.GetBytes( texto.ToString() );
+            return Encoding.UTF8.GetBytes(texto.ToString());
         }
 
-        public byte[] LerArquivo(string recurso)
+        // tipos mime a serem suportados
+        private void TiposMimeAdd()
         {
-            string diretorio = "C:\\Users\\Alexandre\\Documents\\Cursos\\CSharp\\CSharpComDotNet5\\ServidorHttpSimples\\www\\";
-            string caminhoArquivo = diretorio + recurso.Replace("/", "\\");
-            if(File.Exists(caminhoArquivo)) return File.ReadAllBytes(caminhoArquivo);
-            else return Array.Empty<byte>();
+            TiposMime = new()
+            {
+                { ".htm", "text/html;charset=utf-8" },
+                { ".html", "text/html;charset=utf-8" },
+                { ".dhtml", "text/html;charset=utf-8" },
+                { ".css", "text/css" },
+                { ".js", "text/javascript" },
+                { ".png", "image/png" },
+                { ".jpg", "image/jpeg" },
+                { ".gif", "image/gif" },
+                { ".svg", "image/svg+xml" },
+                { ".webp", "image/webp" },
+                { ".ico", "image/ico" },
+                { ".woff", "font/woff" },
+                { ".woff2", "font/woff2" }
+            };
+        }
+
+        public void MapearDiretoriosHost()
+        {
+            DiretoriosHost = new()
+            {
+                { "localhost", "C:\\Users\\Alexandre\\Documents\\Cursos\\CSharp\\CSharpComDotNet5\\ServidorHttpSimples\\www\\localhost" },
+                { "servidorsimples.com", "C:\\Users\\Alexandre\\Documents\\Cursos\\CSharp\\CSharpComDotNet5\\ServidorHttpSimples\\www\\servidorsimples.com" }
+            };
+        }
+
+        public string ObterDiretorio(string host, string arquivo)
+        {
+            string diretorio = DiretoriosHost[host.Split(":")[0]];
+            return diretorio + arquivo.Replace("/", "\\");
+        }
+
+        public byte[] GerarHtmlDinamico(string caminhoArquivo, SortedList<string, string> parametros)
+        {
+            string coringa = "{{HtmlGerado}}";
+            string htmlModelo = File.ReadAllText(caminhoArquivo);
+            StringBuilder htmlGerado = new();
+            /*htmlGerado.Append("<ul>");
+            foreach(var tipo in TiposMime.Keys)
+            {
+                htmlGerado.Append($"<li>Arquivos com extensão {tipo}</li>");
+            }
+            htmlGerado.Append("</ul>");*/
+            if (parametros.Count > 0)
+            {
+                htmlGerado.Append("<ul>");
+                foreach (var p in parametros)
+                {
+                    htmlGerado.Append($"<li>{p.Key}={p.Value}</li>");
+                }
+                htmlGerado.Append("</ul>");
+            }
+            else
+            {
+                htmlGerado.Append("<p>Nenhum parâmetro foi passado.</p>");
+            }
+            string textoHtmlGerado = htmlModelo.Replace(coringa, htmlGerado.ToString());
+            return Encoding.UTF8.GetBytes(textoHtmlGerado, 0, textoHtmlGerado.Length);
+        }
+
+        private SortedList<string, string> ProcessarParametros(string textoParametros)
+        {
+            SortedList<string, string> parametros = new();
+            if (!string.IsNullOrEmpty(textoParametros.Trim()))
+            {
+                string[] paresChaveValor = textoParametros.Split("&");
+                foreach(var par in  paresChaveValor)
+                {
+                    parametros.Add(par.Split("=")[0].ToLower(), par.Split("=")[1]);
+                }
+            }
+            return parametros;
         }
     }
 }
