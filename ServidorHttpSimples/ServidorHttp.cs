@@ -1,6 +1,7 @@
 ﻿using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Web;
 
 namespace ServidorHttpSimples
 {
@@ -63,19 +64,31 @@ namespace ServidorHttpSimples
                     string textoParametros = recursoBuscado.Contains("?") ?
                         recursoBuscado.Split("?")[1] : "";
                     SortedList<string, string> parametros = ProcessarParametros(textoParametros);
+                    // capiturar dados do formulário no corpo da requisição
+                    string dadosPost = textoRequisicao.Contains("\r\n\r\n") ?
+                        textoRequisicao.Split("\r\n\r\n")[1] : "";
+                    if(!string.IsNullOrEmpty(dadosPost))
+                    {
+                        dadosPost = HttpUtility.UrlDecode(dadosPost, Encoding.UTF8);
+                        var parametrosPost = ProcessarParametros(dadosPost);
+                        foreach(var pp in parametrosPost)
+                        {
+                            parametros.Add(pp.Key, pp.Value);
+                        }
+                    }
                     recursoBuscado = recursoBuscado.Split("?")[0];
                     string versaoHttp = linhas[0].Substring(segundoEspaco + 1);
                     primeiroEspaco  = linhas[1].IndexOf(" ");
                     string nomeHost = linhas[1].Substring(primeiroEspaco + 1);
-                    byte[] bytesCabecalho = null;
-                    byte[] bytesConteudo = null;
+                    byte[]? bytesCabecalho = null;
+                    byte[]? bytesConteudo = null;
                     FileInfo arquivo = new(ObterDiretorio(nomeHost, recursoBuscado));
                     if (arquivo.Exists)
                     {
                         if (TiposMime.ContainsKey(arquivo.Extension.ToLower()))
                         {
                             if (arquivo.Extension.ToLower() == ".dhtml") 
-                                bytesConteudo = GerarHtmlDinamico(arquivo.FullName, parametros);
+                                bytesConteudo = GerarHtmlDinamico(arquivo.FullName, parametros, metodoHttp);
                             else 
                                 bytesConteudo = File.ReadAllBytes(arquivo.FullName);
                             string tipoMime = TiposMime[arquivo.Extension.ToLower()];
@@ -147,32 +160,22 @@ namespace ServidorHttpSimples
             return diretorio + arquivo.Replace("/", "\\");
         }
 
-        public byte[] GerarHtmlDinamico(string caminhoArquivo, SortedList<string, string> parametros)
+        public byte[] GerarHtmlDinamico(string caminhoArquivo, SortedList<string, string> parametros, string metodoHttp)
         {
-            string coringa = "{{HtmlGerado}}";
-            string htmlModelo = File.ReadAllText(caminhoArquivo);
-            StringBuilder htmlGerado = new();
-            /*htmlGerado.Append("<ul>");
-            foreach(var tipo in TiposMime.Keys)
+            FileInfo arquivo = new(caminhoArquivo);
+            string nomeClassePagina = "ServidorHttpSimples.Pagina" + arquivo.Name.Replace(arquivo.Extension, "");
+            Type tipoPaginaDinamica = Type.GetType(nomeClassePagina, true, true);
+            PaginaDinamica pd = Activator.CreateInstance(tipoPaginaDinamica) as PaginaDinamica;
+            pd.HtmlModelo = File.ReadAllText(caminhoArquivo);
+            switch (metodoHttp.ToLower())
             {
-                htmlGerado.Append($"<li>Arquivos com extensão {tipo}</li>");
+                case "get":
+                    return pd.Get(parametros);
+                case "post":
+                    return pd.Post(parametros);
+                default:
+                    return new byte[0];
             }
-            htmlGerado.Append("</ul>");*/
-            if (parametros.Count > 0)
-            {
-                htmlGerado.Append("<ul>");
-                foreach (var p in parametros)
-                {
-                    htmlGerado.Append($"<li>{p.Key}={p.Value}</li>");
-                }
-                htmlGerado.Append("</ul>");
-            }
-            else
-            {
-                htmlGerado.Append("<p>Nenhum parâmetro foi passado.</p>");
-            }
-            string textoHtmlGerado = htmlModelo.Replace(coringa, htmlGerado.ToString());
-            return Encoding.UTF8.GetBytes(textoHtmlGerado, 0, textoHtmlGerado.Length);
         }
 
         private SortedList<string, string> ProcessarParametros(string textoParametros)
